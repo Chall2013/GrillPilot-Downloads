@@ -6,15 +6,20 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
-  group: grillpilot-public-release
+  group: github-pages
   cancel-in-progress: false
 
 jobs:
   activate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     env:
       EXPECTED_CERT_SHA256: ${{ vars.GRILLPILOT_CERT_SHA256 }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -114,3 +119,18 @@ jobs:
           git add latest.json
           git commit -m "release: activate verified GrillPilot $RELEASE_TAG"
           git push
+
+      - name: Stage the verified website files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public
+          cp index.html styles.css app.js latest.json public/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - name: Deploy verified download page
+        id: deploy
+        uses: actions/deploy-pages@v4
