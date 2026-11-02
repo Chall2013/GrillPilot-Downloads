@@ -1,0 +1,116 @@
+name: Activate verified APK download
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: grillpilot-public-release
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EXPECTED_CERT_SHA256: ${{ vars.GRILLPILOT_CERT_SHA256 }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Check release authorization and expected signing certificate
+        shell: bash
+        env:
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          [[ "$IS_PRERELEASE" == "true" ]] || { echo "::error::Only approved beta (pre-release) APKs are enabled for now."; exit 1; }
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ]] || { echo "::error::Invalid release tag"; exit 1; }
+          [[ "$EXPECTED_CERT_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo "::error::Configure GRILLPILOT_CERT_SHA256 repository variable first."; exit 1; }
+
+      - name: Download the release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$RELEASE_TAG" --pattern "GrillPilot-release.apk" --dir dist
+          test -s dist/GrillPilot-release.apk
+          test "$(find dist -maxdepth 1 -type f -name '*.apk' | wc -l)" -eq 1
+
+      - uses: android-actions/setup-android@v4
+      - name: Install Android build tools
+        run: sdkmanager "build-tools;35.0.0"
+
+      - name: Verify APK's signature and authorized certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=dist/GrillPilot-release.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$APK" > dist/cert-details.txt
+          actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' dist/cert-details.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          expected="$(printf '%s' "$EXPECTED_CERT_SHA256" | tr '[:upper:]' '[:lower:]')"
+          [[ -n "$actual" && "$actual" == "$expected" ]] || {
+            echo "::error::APK signing identity does not match the approved release certificate"
+            exit 1
+          }
+
+      - name: Generate approved website manifest from actual APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, re, subprocess
+          from pathlib import Path
+          from urllib.parse import quote
+
+          apk = Path("dist/GrillPilot-release.apk")
+          tool = os.path.join(os.environ["ANDROID_HOME"], "build-tools", "35.0.0", "aapt")
+          details = subprocess.check_output([tool, "dump", "badging", str(apk)], text=True)
+          m = re.search(r"^package: name='([^']+)' versionCode='([0-9]+)' versionName='([^']+)'", details, re.MULTILINE)
+          if not m or m.group(1) != "dev.grillpilot.igrill":
+              raise SystemExit("ERROR: APK package identity is incorrect")
+          version_code = int(m.group(2))
+          version_name = m.group(3)
+          if version_code < 1 or not 0 < len(version_name) <= 80:
+              raise SystemExit("ERROR: Invalid APK version")
+
+          current = Path("latest.json")
+          if current.exists():
+              existing = json.loads(current.read_text(encoding="utf-8"))
+              if existing.get("status") == "available" and int(existing.get("version_code", 0)) >= version_code:
+                  raise SystemExit("ERROR: Refusing to activate an older or duplicate version")
+
+          tag = os.environ["RELEASE_TAG"]
+          release_url = (
+              "https://github.com/Chall2013/GrillPilot-Downloads/releases/download/"
+              + quote(tag, safe="")
+              + "/GrillPilot-release.apk"
+          )
+          data = {
+              "status": "available",
+              "version_code": version_code,
+              "version_name": version_name,
+              "apk_url": release_url,
+              "sha256": hashlib.sha256(apk.read_bytes()).hexdigest(),
+              "notes": "Signed GrillPilot beta. Verify thermometer readings and alerts before relying on it."
+          }
+          current.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          print("Verified signed beta", version_name, "version code", version_code)
+          PY
+
+      - name: Activate download page
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add latest.json
+          git commit -m "release: activate verified GrillPilot $RELEASE_TAG"
+          git push
