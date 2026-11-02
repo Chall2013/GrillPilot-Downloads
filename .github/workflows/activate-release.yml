@@ -1,8 +1,20 @@
 name: Activate verified APK download
 
+# GitHub Pages' deployment environment permits releases from main.
+# A public release tag is not an eligible deployment ref, so use a
+# main-branch request instead of an on: release deployment.
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - 'release-requests/current.txt'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Verified public beta tag to activate (manual fallback)'
+        required: true
+        type: string
+        default: 'v0.6.0-beta.1'
 
 permissions:
   contents: write
@@ -22,7 +34,7 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     env:
       EXPECTED_CERT_SHA256: ${{ vars.GRILLPILOT_CERT_SHA256 }}
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_TAG: ${{ inputs.release_tag || '' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -31,13 +43,17 @@ jobs:
 
       - name: Check release authorization and expected signing certificate
         shell: bash
-        env:
-          IS_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           set -euo pipefail
-          [[ "$IS_PRERELEASE" == "true" ]] || { echo "::error::Only approved beta (pre-release) APKs are enabled for now."; exit 1; }
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ]] || { echo "::error::Invalid release tag"; exit 1; }
+          if [[ -z "$RELEASE_TAG" ]]; then
+            test -s release-requests/current.txt
+            RELEASE_TAG="$(tr -d '\r\n' < release-requests/current.txt)"
+            echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          fi
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]] || { echo "::error::Invalid beta release tag"; exit 1; }
           [[ "$EXPECTED_CERT_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo "::error::Configure GRILLPILOT_CERT_SHA256 repository variable first."; exit 1; }
+          is_prerelease="$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)"
+          [[ "$is_prerelease" == "true" ]] || { echo "::error::Only published beta pre-releases can be activated."; exit 1; }
 
       - name: Download the release APK
         shell: bash
