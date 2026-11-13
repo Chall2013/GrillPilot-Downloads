@@ -1,8 +1,8 @@
 {
   "status": "available",
-  "version_code": 23,
-  "version_name": "0.6.1-beta.13",
-  "apk_url": "https://github.com/Chall2013/GrillPilot-Downloads/releases/download/v0.6.1-beta.13/GrillPilot-release.apk",
-  "sha256": "8fcb7811c4d924a8b72625b6fc880d8a867acb25478f9d281033be89e2bc8365",
+  "version_code": 24,
+  "version_name": "0.6.1-beta.14",
+  "apk_url": "https://github.com/Chall2013/GrillPilot-Downloads/releases/download/v0.6.1-beta.14/GrillPilot-release.apk",
+  "sha256": "6cbf0160a2b3df4e208514f8238f664b1a2de5dfe31a928c59a1d32ad0d7dfe2",
   "notes": "Signed GrillPilot beta. Verify thermometer readings and alerts before relying on it."
 }
